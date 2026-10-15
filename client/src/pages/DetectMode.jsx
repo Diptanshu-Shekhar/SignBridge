@@ -1,115 +1,154 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { normalize, flattenLandmarks } from '../utils/normalize';
+import { API_URL, MEDIAPIPE_WASM_URL, HAND_MODEL_URL } from '../config';
+
+const CONFUSING_PAIRS = ['A', 'S', 'U', 'V', 'M', 'N'];
+// Minimum classifier confidence for a prediction to count
+// Tune these using the live "Model sees" readout on the page
+const NORMAL_THRESHOLD = 0.5;
+const STRICT_THRESHOLD = 0.6;
+// Consecutive matching predictions (one every 250ms) needed to confirm a letter
+const STABILITY_COUNT = 8;
+const STRICT_STABILITY_COUNT = 12;
+const REQUEST_INTERVAL_MS = 250;
 
 export default function DetectMode() {
-  const { user, token } = useAuth();
+  const { token } = useAuth();
   const navigate = useNavigate();
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const handsRef = useRef(null);
   const streamRef = useRef(null);
+  const animFrameRef = useRef(null);
+  // Each mount gets its own session id. React StrictMode mounts twice in
+  // development, so async work from an old session must stop itself
+  const sessionRef = useRef(0);
   const lastSentRef = useRef(0);
+  const requestInFlightRef = useRef(false);
   const stabilityBufferRef = useRef([]);
-  const wordTimerRef = useRef(null);
-  const signCompletedRef = useRef(false);
+  // Last letter added to the sentence. The same letter is only added again
+  // after the hand leaves the frame, so a held sign does not repeat
+  const lastAddedRef = useRef(null);
+  const tokenRef = useRef(token);
+  const recognitionRef = useRef(null);
 
   const [sentence, setSentence] = useState('');
   const [currentLetter, setCurrentLetter] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isListening, setIsListening] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [hearingText, setHearingText] = useState('');
   const [recognitionActive, setRecognitionActive] = useState(false);
-  const recognitionRef = useRef(null);
-
-  const CONFUSING_PAIRS = ['A', 'S', 'U', 'V', 'M', 'N'];
-  const NORMAL_THRESHOLD = 0.75;
-  const STRICT_THRESHOLD = 0.90;
-  const STABILITY_COUNT = 10;
-  const STRICT_STABILITY_COUNT = 15;
+  const [livePrediction, setLivePrediction] = useState(null);
+  const [handVisible, setHandVisible] = useState(false);
+  const [stabilityProgress, setStabilityProgress] = useState(0);
+  const [aiError, setAiError] = useState('');
 
   useEffect(() => {
-    initMediaPipe();
+    tokenRef.current = token;
+  }, [token]);
+
+  useEffect(() => {
+    const session = sessionRef.current;
+    initMediaPipe(session);
     return () => {
       cleanup();
     };
   }, []);
 
   const cleanup = () => {
+    sessionRef.current += 1;
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     if (handsRef.current) {
       handsRef.current.close();
+      handsRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (wordTimerRef.current) {
-      clearTimeout(wordTimerRef.current);
+      streamRef.current = null;
     }
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
   };
 
-  const initMediaPipe = async () => {
+  const initMediaPipe = async (session) => {
     try {
       const { HandLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
 
-      const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
-      );
+      const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
 
-      handsRef.current = await HandLandmarker.createFromOptions(vision, {
+      const hands = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
-          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+          modelAssetPath: HAND_MODEL_URL,
           delegate: 'GPU'
         },
         runningMode: 'VIDEO',
         numHands: 1
       });
 
-      await startCamera();
-      setIsLoading(false);
+      // Page was closed while MediaPipe was loading
+      if (sessionRef.current !== session) {
+        hands.close();
+        return;
+      }
+      handsRef.current = hands;
+
+      await startCamera(session);
+      if (sessionRef.current === session) setIsLoading(false);
 
     } catch (error) {
       console.error('MediaPipe initialization error:', error);
+      setLoadError('Could not start the camera or MediaPipe. Check camera permission and refresh.');
       setIsLoading(false);
     }
   };
 
-  const startCamera = async () => {
+  const startCamera = async (session) => {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    if (sessionRef.current !== session || !videoRef.current) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
     streamRef.current = stream;
     videoRef.current.srcObject = stream;
     await videoRef.current.play();
-    requestAnimationFrame(processFrame);
+    animFrameRef.current = requestAnimationFrame(processFrame);
   };
 
-  const processFrame = useCallback(async () => {
+  const processFrame = () => {
+    if (!handsRef.current && !streamRef.current) return;
     if (!handsRef.current || !videoRef.current || videoRef.current.readyState < 2) {
-      requestAnimationFrame(processFrame);
+      animFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
 
-    const now = Date.now();
+    const now = performance.now();
     const results = handsRef.current.detectForVideo(videoRef.current, now);
 
     drawSkeleton(results);
 
     if (results.landmarks && results.landmarks.length > 0) {
-      if (now - lastSentRef.current > 250) {
+      setHandVisible(true);
+      // Do not wait for the response, so the skeleton keeps drawing smoothly
+      if (now - lastSentRef.current > REQUEST_INTERVAL_MS && !requestInFlightRef.current) {
         lastSentRef.current = now;
-        await sendToClassifier(results.landmarks[0]);
+        sendToClassifier(results.landmarks[0]);
       }
     } else {
+      setHandVisible(false);
       setCurrentLetter('');
+      setLivePrediction(null);
+      setStabilityProgress(0);
       stabilityBufferRef.current = [];
+      lastAddedRef.current = null;
     }
 
-    requestAnimationFrame(processFrame);
-  }, []);
+    animFrameRef.current = requestAnimationFrame(processFrame);
+  };
 
   const drawSkeleton = (results) => {
     const canvas = canvasRef.current;
@@ -151,48 +190,77 @@ export default function DetectMode() {
   };
 
   const sendToClassifier = async (landmarks) => {
+    requestInFlightRef.current = true;
     try {
       const normalized = normalize(landmarks);
       const flat = flattenLandmarks(normalized);
 
+      // Curl angles are calculated by the AI service from the landmarks
       const response = await axios.post(
-        'http://localhost:5000/ai/detect',
-        { landmarks: flat, curlAngles: [] },
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${API_URL}/ai/detect`,
+        { landmarks: flat },
+        { headers: { Authorization: `Bearer ${tokenRef.current}` } }
       );
+      if (!handsRef.current) return;
+      setAiError('');
 
       const { letter, confidence } = response.data;
-      const threshold = CONFUSING_PAIRS.includes(letter) ? STRICT_THRESHOLD : NORMAL_THRESHOLD;
-      const stabilityCount = CONFUSING_PAIRS.includes(letter) ? STRICT_STABILITY_COUNT : STABILITY_COUNT;
+      const isConfusing = CONFUSING_PAIRS.includes(letter);
+      const threshold = isConfusing ? STRICT_THRESHOLD : NORMAL_THRESHOLD;
+      const stabilityCount = isConfusing ? STRICT_STABILITY_COUNT : STABILITY_COUNT;
 
-      if (confidence >= threshold) {
-        stabilityBufferRef.current.push(letter);
-        if (stabilityBufferRef.current.length > stabilityCount) {
-          stabilityBufferRef.current.shift();
-        }
+      setLivePrediction({ letter, confidence, threshold });
 
-        const allSame = stabilityBufferRef.current.length === stabilityCount &&
-          stabilityBufferRef.current.every(l => l === letter);
-
-        if (allSame && !signCompletedRef.current) {
-          signCompletedRef.current = true;
-          setCurrentLetter(letter);
-          setSentence(prev => prev + letter);
-          stabilityBufferRef.current = [];
-
-          if (wordTimerRef.current) clearTimeout(wordTimerRef.current);
-          wordTimerRef.current = setTimeout(() => {
-            setSentence(prev => prev + ' ');
-            signCompletedRef.current = false;
-          }, 1500);
-        }
-      } else {
+      if (confidence < threshold) {
         stabilityBufferRef.current = [];
+        setStabilityProgress(0);
+        return;
+      }
+
+      const buffer = stabilityBufferRef.current;
+      if (buffer.length > 0 && buffer[buffer.length - 1] !== letter) {
+        buffer.length = 0;
+      }
+      buffer.push(letter);
+      setStabilityProgress(Math.min(buffer.length / stabilityCount, 1));
+
+      if (buffer.length >= stabilityCount) {
+        stabilityBufferRef.current = [];
+        setCurrentLetter(letter);
+        if (letter !== lastAddedRef.current) {
+          lastAddedRef.current = letter;
+          setSentence(prev => prev + letter);
+        }
       }
 
     } catch (error) {
+      if (!handsRef.current) return;
+      if (error.response?.status === 401) {
+        setAiError('Session expired. Please log in again.');
+      } else {
+        setAiError(error.response?.data?.message || 'Cannot reach the server. Is it running?');
+      }
       console.error('Classifier error:', error);
+    } finally {
+      requestInFlightRef.current = false;
     }
+  };
+
+  const addSpace = () => {
+    setSentence(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' '));
+    // Allow the same letter to start the next word
+    lastAddedRef.current = null;
+  };
+
+  const backspace = () => {
+    setSentence(prev => prev.slice(0, -1));
+    lastAddedRef.current = null;
+  };
+
+  const clearSentence = () => {
+    setSentence('');
+    setCurrentLetter('');
+    lastAddedRef.current = null;
   };
 
   const speakSentence = () => {
@@ -206,14 +274,12 @@ export default function DetectMode() {
 
     // Log to MongoDB
     axios.post(
-      'http://localhost:5000/detection/log',
+      `${API_URL}/detection/log`,
       { sentence: sentence.trim() },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+      { headers: { Authorization: `Bearer ${tokenRef.current}` } }
+    ).catch(error => console.error('Error logging sentence:', error));
 
-    setSentence('');
-    setCurrentLetter('');
-    signCompletedRef.current = false;
+    clearSentence();
   };
 
   const startHearingRecognition = () => {
@@ -232,6 +298,7 @@ export default function DetectMode() {
       const transcript = event.results[event.results.length - 1][0].transcript;
       setHearingText(transcript);
     };
+    recognition.onend = () => setRecognitionActive(false);
 
     recognition.start();
     setRecognitionActive(true);
@@ -260,7 +327,9 @@ export default function DetectMode() {
 
       <div className="max-w-4xl mx-auto px-6 py-8">
         <h2 className="text-3xl font-bold mb-2 text-center">Detection Mode</h2>
-        <p className="text-gray-400 text-center mb-8">Sign into the webcam and press Speak when done</p>
+        <p className="text-gray-400 text-center mb-8">
+          Sign a letter and hold it steady. Lower your hand to repeat a letter, press Space between words, and Speak when done
+        </p>
 
         {isLoading && (
           <div className="text-center py-8">
@@ -268,17 +337,25 @@ export default function DetectMode() {
           </div>
         )}
 
-        {/* Webcam and skeleton */}
-        <div className="relative bg-gray-800 rounded-2xl overflow-hidden mb-6" style={{ aspectRatio: '16/9' }}>
+        {loadError && (
+          <div className="bg-red-500 bg-opacity-20 border border-red-500 text-red-400 rounded-xl p-4 mb-4 text-center">
+            {loadError}
+          </div>
+        )}
+
+        {/* Webcam and skeleton - mirrored so it behaves like a mirror (landmarks are unaffected) */}
+        <div className="relative bg-gray-800 rounded-2xl overflow-hidden mb-4" style={{ aspectRatio: '16/9' }}>
           <video
             ref={videoRef}
             className="w-full h-full object-cover"
+            style={{ transform: 'scaleX(-1)' }}
             playsInline
             muted
           />
           <canvas
             ref={canvasRef}
             className="absolute top-0 left-0 w-full h-full"
+            style={{ transform: 'scaleX(-1)' }}
           />
           {currentLetter && (
             <div className="absolute top-4 right-4 bg-blue-600 text-white text-4xl font-bold w-16 h-16 rounded-xl flex items-center justify-center">
@@ -287,9 +364,37 @@ export default function DetectMode() {
           )}
         </div>
 
+        {/* Live model readout - shows what the classifier sees right now */}
+        <div className="bg-gray-800 rounded-xl p-4 mb-4">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-gray-400 text-sm">
+              {!handVisible
+                ? 'No hand detected — show your hand to the camera'
+                : livePrediction
+                  ? <>
+                      Model sees: <span className="text-white font-bold text-lg">{livePrediction.letter}</span>{' '}
+                      <span className={livePrediction.confidence >= livePrediction.threshold ? 'text-green-400' : 'text-yellow-400'}>
+                        ({Math.round(livePrediction.confidence * 100)}% confidence, needs {Math.round(livePrediction.threshold * 100)}%)
+                      </span>
+                    </>
+                  : 'Hand detected — waiting for prediction...'}
+            </p>
+            <span className="text-gray-500 text-xs whitespace-nowrap">Hold steady to confirm</span>
+          </div>
+          <div className="w-full bg-gray-700 rounded-full h-2 mt-3">
+            <div
+              className="bg-green-500 h-2 rounded-full transition-all"
+              style={{ width: `${Math.round(stabilityProgress * 100)}%` }}
+            />
+          </div>
+          {aiError && (
+            <p className="text-red-400 text-sm mt-2">AI service: {aiError}</p>
+          )}
+        </div>
+
         {/* Sentence display */}
         <div className="bg-gray-800 rounded-xl p-4 mb-4 min-h-16 flex items-center">
-          <p className="text-white text-xl font-medium">
+          <p className="text-white text-xl font-medium whitespace-pre-wrap">
             {sentence || <span className="text-gray-500">Your sentence will appear here...</span>}
           </p>
         </div>
@@ -297,13 +402,19 @@ export default function DetectMode() {
         {/* Control buttons */}
         <div className="flex gap-3 mb-8">
           <button
-            onClick={() => setSentence(prev => prev.slice(0, -1))}
+            onClick={addSpace}
+            className="bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-xl font-semibold transition duration-200"
+          >
+            ␣ Space
+          </button>
+          <button
+            onClick={backspace}
             className="bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-xl font-semibold transition duration-200"
           >
             ⌫ Backspace
           </button>
           <button
-            onClick={() => { setSentence(''); setCurrentLetter(''); }}
+            onClick={clearSentence}
             className="bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-xl font-semibold transition duration-200"
           >
             ✕ Clear

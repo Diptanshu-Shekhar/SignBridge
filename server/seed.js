@@ -9,31 +9,32 @@ const lessons = [
     title: 'Alphabets',
     category: 'alphabets',
     signs: [
-      { word: 'A', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/a/a.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'B', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/b/b.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'C', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/c/c.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'D', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/d/d.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'E', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/e/e.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'F', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/f/f.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'G', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/g/g.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'H', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/h/h.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'I', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/i/i.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'K', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/k/k.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'L', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/l/l.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'M', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/m/m.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'N', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/n/n.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'O', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/o/o.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'P', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/p/p.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'Q', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/q/q.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'R', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/r/r.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'S', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/s/s.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'T', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/t/t.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'U', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/u/u.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'V', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/v/v.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'W', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/w/w.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'X', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/x/x.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'Y', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/y/y.gif', landmarkData: [], threshold: 0.15 },
-      { word: 'Z', referenceImageURL: 'https://www.lifeprint.com/asl101/gifs/z/z.gif', landmarkData: [], threshold: 0.15 },
+      { word: 'A', referenceImageURL: '/signs/A.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'B', referenceImageURL: '/signs/B.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'C', referenceImageURL: '/signs/C.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'D', referenceImageURL: '/signs/D.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'E', referenceImageURL: '/signs/E.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'F', referenceImageURL: '/signs/F.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'G', referenceImageURL: '/signs/G.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'H', referenceImageURL: '/signs/H.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'I', referenceImageURL: '/signs/I.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'J', referenceImageURL: '/signs/J.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'K', referenceImageURL: '/signs/K.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'L', referenceImageURL: '/signs/L.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'M', referenceImageURL: '/signs/M.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'N', referenceImageURL: '/signs/N.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'O', referenceImageURL: '/signs/O.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'P', referenceImageURL: '/signs/P.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'Q', referenceImageURL: '/signs/Q.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'R', referenceImageURL: '/signs/R.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'S', referenceImageURL: '/signs/S.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'T', referenceImageURL: '/signs/T.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'U', referenceImageURL: '/signs/U.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'V', referenceImageURL: '/signs/V.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'W', referenceImageURL: '/signs/W.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'X', referenceImageURL: '/signs/X.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'Y', referenceImageURL: '/signs/Y.jpeg', landmarkData: [], threshold: 0.15 },
+      { word: 'Z', referenceImageURL: '/signs/Z.jpeg', landmarkData: [], threshold: 0.15 },
     ]
   },
   {
@@ -82,8 +83,9 @@ async function seed() {
     // Insert new lessons
     await Lesson.insertMany(lessons);
     console.log('Lessons seeded successfully');
+    console.log('Now run node seedLandmarks.js to add reference landmarks');
     console.log('Total lessons created: 3');
-    console.log('Alphabets: 25 signs');
+    console.log('Alphabets: 26 signs');
     console.log('Numbers: 10 signs');
     console.log('Basic Words: 10 signs');
 

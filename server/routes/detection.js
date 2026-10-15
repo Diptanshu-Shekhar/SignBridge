@@ -7,6 +7,9 @@ const authMiddleware = require('../middleware/auth');
 router.post('/log', authMiddleware, async (req, res) => {
   try {
     const { sentence } = req.body;
+    if (!sentence || !sentence.trim()) {
+      return res.status(400).json({ message: 'Sentence is required' });
+    }
     const userId = req.user.userId;
 
     const log = new DetectionLog({
@@ -30,6 +33,11 @@ router.post('/log', authMiddleware, async (req, res) => {
 // GET USER DETECTION LOGS
 router.get('/logs/:userId', authMiddleware, async (req, res) => {
   try {
+    // Users can only read their own data
+    if (req.params.userId !== req.user.userId) {
+      return res.status(403).json({ message: 'You can only view your own data' });
+    }
+
     const logs = await DetectionLog.find({ userId: req.params.userId })
       .sort({ timestamp: -1 })
       .limit(20);

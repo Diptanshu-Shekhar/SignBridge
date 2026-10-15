@@ -6,6 +6,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import DetectMode from './pages/DetectMode';
 import LearnMode from './pages/LearnMode';
+import DataCollection from './pages/DataCollection';
 
 // Protected route component
 function ProtectedRoute({ children }) {
@@ -48,6 +49,11 @@ function AppRoutes() {
           <LearnMode />
         </ProtectedRoute>
       } />
+      <Route path="/datacollection" element={
+  <ProtectedRoute>
+    <DataCollection />
+  </ProtectedRoute>
+} />
       <Route path="/" element={<Navigate to="/login" />} />
     </Routes>
   );

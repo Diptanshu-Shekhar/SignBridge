@@ -8,8 +8,12 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+// In production set CLIENT_URL (comma separated) to the Vercel URL(s)
+const allowedOrigins = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.split(',').map(o => o.trim())
+  : '*';
+app.use(cors({ origin: allowedOrigins }));
+app.use(express.json({ limit: '5mb' }));
 
 // Test route
 app.get('/', (req, res) => {
@@ -28,6 +32,8 @@ app.use('/lessons', lessonRoutes);
 app.use('/progress', progressRoutes);
 app.use('/detection', detectionRoutes);
 app.use('/ai', proxyRoutes);
+const dataCollectionRoutes = require('./routes/datacollection');
+app.use('/datacollection', dataCollectionRoutes);
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)

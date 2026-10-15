@@ -49,6 +49,11 @@ router.post('/save', authMiddleware, async (req, res) => {
 // GET USER PROGRESS
 router.get('/:userId', authMiddleware, async (req, res) => {
   try {
+    // Users can only read their own data
+    if (req.params.userId !== req.user.userId) {
+      return res.status(403).json({ message: 'You can only view your own data' });
+    }
+
     const progress = await Progress.find({ userId: req.params.userId })
       .populate('lessonId', 'title category');
 

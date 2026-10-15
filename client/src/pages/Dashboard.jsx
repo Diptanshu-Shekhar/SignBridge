@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { API_URL } from '../config';
 
 export default function Dashboard() {
   const { user, token, logout } = useAuth();
@@ -20,13 +21,13 @@ export default function Dashboard() {
       const headers = { Authorization: `Bearer ${token}` };
 
       if (user.role === 'learner') {
-        const lessonsRes = await axios.get('http://localhost:5000/lessons', { headers });
+        const lessonsRes = await axios.get(`${API_URL}/lessons`, { headers });
         setLessons(lessonsRes.data.lessons);
 
-        const progressRes = await axios.get(`http://localhost:5000/progress/${user.id}`, { headers });
+        const progressRes = await axios.get(`${API_URL}/progress/${user.id}`, { headers });
         setProgress(progressRes.data.progress);
       } else {
-        const logsRes = await axios.get(`http://localhost:5000/detection/logs/${user.id}`, { headers });
+        const logsRes = await axios.get(`${API_URL}/detection/logs/${user.id}`, { headers });
         setDetectionLogs(logsRes.data.logs);
       }
 
@@ -41,6 +42,14 @@ export default function Dashboard() {
     const p = progress.find(p => p.lessonId?._id === lessonId);
     return p ? p : null;
   };
+
+  // A lesson is ready once its signs have reference landmarks from training
+  const isLessonReady = (lesson) =>
+    lesson.signs?.some(sign => sign.landmarkData && sign.landmarkData.length > 0);
+
+  // Ready lessons first, "Coming soon" lessons after them
+  const sortedLessons = [...lessons].sort((a, b) => isLessonReady(b) - isLessonReady(a));
+  const firstReadyLesson = sortedLessons.find(isLessonReady);
 
   const handleLogout = () => {
     logout();
@@ -103,23 +112,27 @@ export default function Dashboard() {
         {user.role === 'learner' && (
           <div>
             <button
-              onClick={() => navigate('/learn/' + (lessons[0]?._id || ''))}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 rounded-xl mb-8 text-lg transition duration-200"
+              onClick={() => firstReadyLesson && navigate('/learn/' + firstReadyLesson._id)}
+              disabled={!firstReadyLesson}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl mb-8 text-lg transition duration-200"
             >
               Start Learning Mode
             </button>
 
             <h3 className="text-xl font-semibold mb-4">Your Lessons</h3>
             <div className="grid gap-4">
-              {lessons.map((lesson, index) => {
+              {sortedLessons.map((lesson) => {
                 const lessonProgress = getProgressForLesson(lesson._id);
-                const isFirst = index === 0;
+                const isReady = isLessonReady(lesson);
+                const isFirst = lesson === firstReadyLesson;
 
                 return (
                   <div
                     key={lesson._id}
-                    className="bg-gray-800 rounded-xl p-6 flex items-center justify-between cursor-pointer hover:bg-gray-700 transition duration-200"
-                    onClick={() => navigate(`/learn/${lesson._id}`)}
+                    className={`bg-gray-800 rounded-xl p-6 flex items-center justify-between transition duration-200 ${
+                      isReady ? 'cursor-pointer hover:bg-gray-700' : 'opacity-50 cursor-not-allowed'
+                    }`}
+                    onClick={() => isReady && navigate(`/learn/${lesson._id}`)}
                   >
                     <div className="flex items-center gap-4">
                       <span className="text-4xl">{getCategoryEmoji(lesson.category)}</span>
@@ -131,16 +144,23 @@ export default function Dashboard() {
                               Start Here
                             </span>
                           )}
+                          {!isReady && (
+                            <span className="bg-gray-600 text-gray-200 text-xs px-2 py-1 rounded-full">
+                              Coming soon
+                            </span>
+                          )}
                         </div>
                         <p className="text-gray-400 text-sm">
-                          {lessonProgress
+                          {!isReady
+                            ? 'This lesson is not available yet'
+                            : lessonProgress
                             ? `${lessonProgress.signsCorrect} out of ${lessonProgress.totalSigns} completed`
                             : `${lesson.signs?.length || 0} signs — not started yet`
                           }
                         </p>
                       </div>
                     </div>
-                    <div className="text-blue-400 text-2xl">→</div>
+                    {isReady && <div className="text-blue-400 text-2xl">→</div>}
                   </div>
                 );
               })}

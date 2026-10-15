@@ -47,7 +47,12 @@ export function euclideanDistance(arr1, arr2) {
   return Math.sqrt(sum);
 }
 
+// How close the user has to be (as a multiple of the threshold) to get
+// "almost there" instead of finger-specific feedback
+export const ALMOST_THERE_FACTOR = 1.3;
+
 // Check sign against reference landmark
+// Returns { result: 'correct' | 'almost' | 'wrong', distance, feedback }
 export function checkSign(userLandmarks, referenceLandmarks, threshold) {
   const userNorm = normalize(userLandmarks);
   const userFlat = flattenLandmarks(userNorm);
@@ -55,27 +60,53 @@ export function checkSign(userLandmarks, referenceLandmarks, threshold) {
   const distance = euclideanDistance(userFlat, refFlat);
 
   if (distance < threshold) {
-    return { result: 'correct' };
-  } else {
-    return {
-      result: 'wrong',
-      feedback: getDetailedFeedback(userNorm, referenceLandmarks)
-    };
+    return { result: 'correct', distance };
   }
+  if (distance < threshold * ALMOST_THERE_FACTOR) {
+    return { result: 'almost', distance, feedback: 'Almost there! Adjust slightly and hold steady' };
+  }
+  return {
+    result: 'wrong',
+    distance,
+    feedback: getDetailedFeedback(userNorm, referenceLandmarks)
+  };
 }
+
+const FINGER_POINTS = {
+  thumb: [1, 2, 3, 4],
+  index: [5, 6, 7, 8],
+  middle: [9, 10, 11, 12],
+  ring: [13, 14, 15, 16],
+  pinky: [17, 18, 19, 20]
+};
+
+// Angle in degrees at point b (180 = straight, smaller = more bent)
+function jointAngle(a, b, c) {
+  const v1 = { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+  const v2 = { x: c.x - b.x, y: c.y - b.y, z: c.z - b.z };
+  const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+  const mag = Math.sqrt(v1.x ** 2 + v1.y ** 2 + v1.z ** 2) * Math.sqrt(v2.x ** 2 + v2.y ** 2 + v2.z ** 2);
+  if (mag === 0) return 180;
+  return Math.acos(Math.min(1, Math.max(-1, dot / mag))) * (180 / Math.PI);
+}
+
+// Total bend of a finger: sum of how far each of its joints (knuckle,
+// middle joint, top joint) is from straight. Point 0 is the wrist.
+function fingerBend(points, [p1, p2, p3, p4]) {
+  return (180 - jointAngle(points[0], points[p1], points[p2])) +
+         (180 - jointAngle(points[p1], points[p2], points[p3])) +
+         (180 - jointAngle(points[p2], points[p3], points[p4]));
+}
+
+// Differences smaller than these count as "close enough"
+const BEND_TOLERANCE_DEGREES = 20;
+const POSITION_TOLERANCE = 0.15;
 
 // Get detailed directional feedback for wrong sign
 export function getDetailedFeedback(userNorm, refNorm) {
-  const FINGER_POINTS = {
-    thumb: [1, 2, 3, 4],
-    index: [5, 6, 7, 8],
-    middle: [9, 10, 11, 12],
-    ring: [13, 14, 15, 16],
-    pinky: [17, 18, 19, 20]
-  };
-
+  // Find the finger furthest from the reference
   let worstFinger = '';
-  let worstDistance = 0;
+  let worstDistance = -1;
 
   for (const [fingerName, points] of Object.entries(FINGER_POINTS)) {
     let fingerDistance = 0;
@@ -92,20 +123,28 @@ export function getDetailedFeedback(userNorm, refNorm) {
     }
   }
 
-  // Determine direction of correction for worst finger
-  const tipIndex = FINGER_POINTS[worstFinger][3];
-  const userTip = userNorm[tipIndex];
-  const refTip = refNorm[tipIndex];
+  const points = FINGER_POINTS[worstFinger];
+  const fingerLabel = worstFinger === 'thumb' ? 'thumb' : `${worstFinger} finger`;
 
-  const yDiff = refTip.y - userTip.y;
-  const zDiff = refTip.z - userTip.z;
-
-  let direction = '';
-  if (Math.abs(zDiff) > Math.abs(yDiff)) {
-    direction = zDiff > 0.1 ? 'should be more curled' : 'should be more extended';
-  } else {
-    direction = yDiff > 0.1 ? 'should be lower' : 'should be higher';
+  // 1. Is the finger bent too much or too little?
+  const bendDiff = fingerBend(refNorm, points) - fingerBend(userNorm, points);
+  if (bendDiff > BEND_TOLERANCE_DEGREES) {
+    return `Your ${fingerLabel} should be more curled`;
+  }
+  if (bendDiff < -BEND_TOLERANCE_DEGREES) {
+    return `Your ${fingerLabel} should be straighter`;
   }
 
-  return `Your ${worstFinger} finger ${direction}`;
-}   
+  // 2. Bend is fine - is the fingertip in the wrong place?
+  // Image y grows downwards, so a larger reference y means "lower"
+  const tip = points[3];
+  const yDiff = refNorm[tip].y - userNorm[tip].y;
+  if (yDiff > POSITION_TOLERANCE) {
+    return `Your ${fingerLabel} should be lower`;
+  }
+  if (yDiff < -POSITION_TOLERANCE) {
+    return `Your ${fingerLabel} should be higher`;
+  }
+
+  return `Your ${fingerLabel} is nearly there — check its position against the picture`;
+}
