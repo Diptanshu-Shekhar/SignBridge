@@ -14,7 +14,12 @@ export default function LearnMode() {
   const canvasRef = useRef(null);
   const handsRef = useRef(null);
   const streamRef = useRef(null);
-  const consecutiveCorrectRef = useRef(0);
+  // Recent results used to decide "correct" (most of them must match)
+  const modelHistoryRef = useRef([]);     // true/false per classifier answer
+  const distanceHistoryRef = useRef([]);  // true/false per frame (fallback only)
+  // null = not known yet, true = AI service answering, false = unreachable
+  const aiAvailableRef = useRef(null);
+  const handVisibleRef = useRef(false);
   const signCompletedRef = useRef(false);
   const pendingFeedbackRef = useRef({ text: '', since: 0 });
   const shownFeedbackRef = useRef('');
@@ -38,14 +43,26 @@ export default function LearnMode() {
   const [feedbackType, setFeedbackType] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isComplete, setIsComplete] = useState(false);
+  const [livePrediction, setLivePrediction] = useState(null);
+  const [handVisible, setHandVisible] = useState(false);
+  const [aiAvailable, setAiAvailable] = useState(null);
+  const [passProgress, setPassProgress] = useState(0);
 
-  // Frames in a row the sign must match (about half a second)
-  const REQUIRED_CONSECUTIVE = 15;
+  // The trained classifier (same as detection mode) decides if a sign is correct.
+  // It is asked every 250ms; 4 of the last 5 answers must be the target letter
+  // with enough confidence (about 1.25 seconds of holding the sign).
+  const CLASSIFIER_INTERVAL_MS = 250;
+  const MODEL_MIN_CONFIDENCE = 0.5;
+  const MODEL_WINDOW = 5;
+  const MODEL_REQUIRED = 4;
+  // Confidence above which the classifier is sure it sees a different letter
+  const OTHER_LETTER_CONFIDENCE = 0.6;
+  // Fallback when the AI service is down: reference distance check,
+  // 12 of the last 15 frames must be within the threshold (about half a second)
+  const DISTANCE_WINDOW = 15;
+  const DISTANCE_REQUIRED = 12;
   // A new feedback message must hold this long before it is shown, so it does not flicker
   const FEEDBACK_HOLD_MS = 400;
-  // Double-check with the trained classifier (alphabet lessons only)
-  const CLASSIFIER_INTERVAL_MS = 300;
-  const CLASSIFIER_MIN_CONFIDENCE = 0.6;
 
   useEffect(() => {
     const session = sessionRef.current;
@@ -147,7 +164,21 @@ export default function LearnMode() {
 
     drawSkeleton(results);
 
-    if (results.landmarks && results.landmarks.length > 0 && !signCompletedRef.current) {
+    const handFound = results.landmarks && results.landmarks.length > 0;
+    if (handFound !== handVisibleRef.current) {
+      handVisibleRef.current = handFound;
+      setHandVisible(handFound);
+      if (!handFound) {
+        // Hand left the frame - start counting again when it comes back
+        modelHistoryRef.current = [];
+        distanceHistoryRef.current = [];
+        predictionRef.current = null;
+        setLivePrediction(null);
+        if (!signCompletedRef.current) setPassProgress(0);
+      }
+    }
+
+    if (handFound && !signCompletedRef.current) {
       askClassifier(results.landmarks[0]);
       compareSign(results.landmarks[0]);
     }
@@ -194,38 +225,85 @@ export default function LearnMode() {
     }
   };
 
+  // Keep the last `size` results and count how many were true
+  const pushResult = (historyRef, value, size) => {
+    const history = historyRef.current;
+    history.push(value);
+    if (history.length > size) history.shift();
+    return history.filter(Boolean).length;
+  };
+
+  const markCorrect = () => {
+    signCompletedRef.current = true;
+    shownFeedbackRef.current = '✅ Correct! Well done!';
+    setFeedback('✅ Correct! Well done!');
+    setFeedbackType('correct');
+    setPassProgress(1);
+    setCorrectCount(prev => prev + 1);
+  };
+
+  const usesModel = () => {
+    const lesson = lessonRef.current;
+    return lesson && lesson.category === 'alphabets' && aiAvailableRef.current !== false;
+  };
+
+  const setAiStatus = (available) => {
+    if (aiAvailableRef.current !== available) {
+      aiAvailableRef.current = available;
+      setAiAvailable(available);
+      modelHistoryRef.current = [];
+      distanceHistoryRef.current = [];
+    }
+  };
+
   // Ask the trained classifier which letter it sees, a few times per second.
-  // Runs in the background; compareSign uses the latest answer.
+  // Its answers decide whether the sign is correct (see the constants above).
   const askClassifier = (landmarks) => {
     const lesson = lessonRef.current;
     if (!lesson || lesson.category !== 'alphabets') return;
     const now = performance.now();
-    if (classifierInFlightRef.current || now - lastClassifierCallRef.current < CLASSIFIER_INTERVAL_MS) return;
+    // While the service is down, only retry every 3 seconds
+    const interval = aiAvailableRef.current === false ? 3000 : CLASSIFIER_INTERVAL_MS;
+    if (classifierInFlightRef.current || now - lastClassifierCallRef.current < interval) return;
     lastClassifierCallRef.current = now;
     classifierInFlightRef.current = true;
 
+    const signIndex = currentSignIndexRef.current;
     const flat = flattenLandmarks(normalize(landmarks));
     axios.post(
       `${API_URL}/ai/detect`,
       { landmarks: flat },
       { headers: { Authorization: `Bearer ${token}` } }
     ).then(response => {
+      setAiStatus(true);
+      // Ignore answers for a sign the learner has already moved past
+      if (signIndex !== currentSignIndexRef.current || signCompletedRef.current) return;
+      if (!handVisibleRef.current) return;
+
       const { letter, confidence } = response.data;
       predictionRef.current = { letter, confidence, time: performance.now() };
+      setLivePrediction({ letter, confidence });
+
+      const target = lessonRef.current.signs[signIndex].word;
+      const matches = letter === target && confidence >= MODEL_MIN_CONFIDENCE;
+      const count = pushResult(modelHistoryRef, matches, MODEL_WINDOW);
+      setPassProgress(Math.min(count / MODEL_REQUIRED, 1));
+      if (count >= MODEL_REQUIRED) markCorrect();
     }).catch(() => {
-      // AI service not available - learning mode still works with the reference comparison
+      // AI service not available - fall back to the reference distance check
+      setAiStatus(false);
       predictionRef.current = null;
+      setLivePrediction(null);
     }).finally(() => {
       classifierInFlightRef.current = false;
     });
   };
 
-  // The classifier's answer if it is recent and confident, otherwise null
-  const confidentOtherLetter = (target) => {
+  // Latest recent classifier answer, or null
+  const recentPrediction = () => {
     const prediction = predictionRef.current;
     if (!prediction || performance.now() - prediction.time > 1000) return null;
-    if (prediction.confidence < CLASSIFIER_MIN_CONFIDENCE) return null;
-    return prediction.letter !== target ? prediction.letter : null;
+    return prediction;
   };
 
   // Only show a new message once it has stayed the same for FEEDBACK_HOLD_MS
@@ -243,6 +321,8 @@ export default function LearnMode() {
     }
   };
 
+  // Runs every frame: gives finger feedback from the reference comparison,
+  // and decides "correct" itself only when the AI service is unavailable
   const compareSign = (landmarks) => {
     const lesson = lessonRef.current;
     if (!lesson || !lesson.signs || lesson.signs.length === 0) return;
@@ -258,28 +338,28 @@ export default function LearnMode() {
     }
 
     const result = checkSign(landmarks, refLandmarks, currentSign.threshold || 0.15);
-    const otherLetter = confidentOtherLetter(currentSign.word);
 
-    if (result.result === 'correct' && !otherLetter) {
-      consecutiveCorrectRef.current += 1;
-      if (consecutiveCorrectRef.current >= REQUIRED_CONSECUTIVE) {
-        signCompletedRef.current = true;
-        shownFeedbackRef.current = '✅ Correct! Well done!';
-        setFeedback('✅ Correct! Well done!');
-        setFeedbackType('correct');
-        setCorrectCount(prev => prev + 1);
-        consecutiveCorrectRef.current = 0;
-      } else {
-        showFeedbackSteadily('Looking good — hold it steady...', 'almost');
+    if (!usesModel()) {
+      // Fallback: most of the recent frames must be within the reference threshold
+      const count = pushResult(distanceHistoryRef, result.result === 'correct', DISTANCE_WINDOW);
+      setPassProgress(Math.min(count / DISTANCE_REQUIRED, 1));
+      if (count >= DISTANCE_REQUIRED) {
+        markCorrect();
+        return;
       }
-      return;
     }
 
-    consecutiveCorrectRef.current = 0;
-    if (otherLetter) {
-      // The shape is close to the reference but the classifier sees another letter
+    const prediction = usesModel() ? recentPrediction() : null;
+    const target = currentSign.word;
+
+    if (prediction && prediction.letter === target && prediction.confidence >= MODEL_MIN_CONFIDENCE) {
+      showFeedbackSteadily('Looking good — hold it steady...', 'almost');
+    } else if (prediction && prediction.letter !== target && prediction.confidence >= OTHER_LETTER_CONFIDENCE) {
+      // Finger hint from the reference comparison, if there is one
       const hint = result.result === 'wrong' && result.feedback ? ` ${result.feedback}.` : '';
-      showFeedbackSteadily(`That looks like ${otherLetter}, not ${currentSign.word}.${hint}`, 'wrong');
+      showFeedbackSteadily(`That looks like ${prediction.letter}, not ${target}.${hint}`, 'wrong');
+    } else if (result.result === 'correct') {
+      showFeedbackSteadily('Looking good — hold it steady...', 'almost');
     } else if (result.result === 'almost') {
       showFeedbackSteadily(result.feedback, 'almost');
     } else {
@@ -303,8 +383,11 @@ export default function LearnMode() {
       shownFeedbackRef.current = '';
       pendingFeedbackRef.current = { text: '', since: 0 };
       predictionRef.current = null;
+      modelHistoryRef.current = [];
+      distanceHistoryRef.current = [];
+      setLivePrediction(null);
+      setPassProgress(0);
       signCompletedRef.current = false;
-      consecutiveCorrectRef.current = 0;
     }
   };
 
@@ -433,6 +516,38 @@ export default function LearnMode() {
             </div>
           </div>
 
+        </div>
+
+        {/* Live readout - what is being judged right now */}
+        <div className="bg-gray-800 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-gray-400 text-sm">
+              {!handVisible
+                ? 'No hand detected — show your hand to the camera'
+                : aiAvailable === false || lesson.category !== 'alphabets'
+                  ? 'Checking against the reference hand shape'
+                  : livePrediction
+                    ? <>
+                        Model sees: <span className="text-white font-bold text-lg">{livePrediction.letter}</span>{' '}
+                        <span className={livePrediction.letter === currentSign.word && livePrediction.confidence >= MODEL_MIN_CONFIDENCE ? 'text-green-400' : 'text-yellow-400'}>
+                          ({Math.round(livePrediction.confidence * 100)}% confidence, needs {currentSign.word} at {Math.round(MODEL_MIN_CONFIDENCE * 100)}%)
+                        </span>
+                      </>
+                    : 'Hand detected — waiting for the model...'}
+            </p>
+            <span className="text-gray-500 text-xs whitespace-nowrap">Hold the sign to pass</span>
+          </div>
+          <div className="w-full bg-gray-700 rounded-full h-2 mt-3">
+            <div
+              className="bg-green-500 h-2 rounded-full transition-all"
+              style={{ width: `${Math.round(passProgress * 100)}%` }}
+            />
+          </div>
+          {aiAvailable === false && lesson.category === 'alphabets' && (
+            <p className="text-yellow-400 text-sm mt-2">
+              AI service is not running — using the reference comparison instead. Start it on port 8000 for the best results.
+            </p>
+          )}
         </div>
 
         {/* Signs that have not been collected and trained yet */}
